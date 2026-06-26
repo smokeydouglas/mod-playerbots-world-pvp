@@ -1,0 +1,45 @@
+[worldserver]
+
+# Playerbot World PvP
+# Simple autonomous hotspot events: attackers rally outside, move into town/zone target,
+# defenders/responders spawn at the defense point, then the event fizzles out.
+
+PlayerbotWorldPvp.Enable = 1
+PlayerbotWorldPvp.Debug = 1
+
+# How often the module rolls for a random world-PvP event.
+PlayerbotWorldPvp.TickSeconds = 60
+PlayerbotWorldPvp.EventChancePerTick = 20
+PlayerbotWorldPvp.MaxActiveEvents = 2
+PlayerbotWorldPvp.StartupDelaySeconds = 120
+
+# Safety: only random Playerbot accounts should ever be moved.
+# auto imports AiPlayerbot.RandomBotAccountPrefix, for your setup likely ashrandbot.
+PlayerbotWorldPvp.BotOnlyEligibilityFilter = 1
+PlayerbotWorldPvp.UsePlayerbotConfig = 1
+PlayerbotWorldPvp.BotAccountPrefix = auto
+PlayerbotWorldPvp.BotAccountMin = 0
+PlayerbotWorldPvp.BotAccountMax = 0
+
+# Movement model.
+# Attackers teleport to rally/outside-town point, then MovePoint toward target.
+# Set HardTeleportToTarget=1 only if bots refuse to move.
+PlayerbotWorldPvp.TeleportBots = 1
+PlayerbotWorldPvp.ReturnBotsAfterEvent = 1
+PlayerbotWorldPvp.UseMovePointAfterRally = 1
+PlayerbotWorldPvp.HardTeleportToTarget = 0
+PlayerbotWorldPvp.MoveFromRallyDelaySeconds = 15
+PlayerbotWorldPvp.PositionJitter = 8
+
+# Candidate pool.
+# GlobalMinLevel clamps every hotspot so lowbie bots do not get dragged into world PvP.
+# For your current realm, keep this at 20 until the bot population catches up.
+PlayerbotWorldPvp.GlobalMinLevel = 20
+PlayerbotWorldPvp.BotQueryLimit = 600
+PlayerbotWorldPvp.MinOnlineBotsRequired = 3
+# Keep small at first because your current server has a thin 20+ population.
+PlayerbotWorldPvp.MaxBotsPerSide = 8
+
+# Audit log.
+PlayerbotWorldPvp.FileLog = 1
+PlayerbotWorldPvp.FileLogPath = Logs/playerbot_world_pvp.log
