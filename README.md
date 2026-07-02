@@ -1,88 +1,50 @@
 # mod-playerbot-world-pvp
 
-Lightweight autonomous Playerbot world-PvP hotspot simulator.
+Autonomous **world PvP** for [AzerothCore](https://www.azerothcore.org/) +
+[Playerbots](https://github.com/liyunfan1223/mod-playerbots): bots stage
+faction-vs-faction fights at weighted, cooldown-gated world hotspots and duel
+outside the capitals, so the open world feels contested and alive.
 
-This is intentionally separate from DungeonSim. DungeonSim makes bot parties feel alive in dungeons; WorldPvP makes random Playerbots cause outdoor trouble, respond to enemy pressure, then leave after a short chaos window.
+This build adds **cross-mod coordination** so it plays nicely with the dungeon-sim
+and artisans mods.
 
-## Current design
+## Features
 
-- WORLD DB hotspots define rally and target points.
-- Attackers teleport to the rally/outside-town point.
-- Attackers then MovePoint toward the target so it looks less like a hard GM teleport.
-- Defenders teleport near the target/defense point.
-- Normal Playerbot/PvP behavior takes over.
-- After the timer, surviving bots return to where they came from.
-- Only random Playerbot accounts are eligible by default.
+- Autonomous hotspot events (attackers vs defenders) on a configurable tick,
+  chance, and active-event cap.
+- Same-faction duels seeded outside Stormwind / Orgrimmar.
+- Account-prefix safety filter so only intended bot accounts are used.
+- GM commands: `.wpvp start`, `.wpvp status`, `.wpvp spot`.
 
-## Install SQL
+## Cross-mod coordination (shared reservation)
 
-```sql
-USE azc_world_ashbringer;
-SOURCE C:/Apps/WowServ/modules/mod-playerbot-world-pvp/data/sql/manual/world_playerbot_world_pvp.sql;
+The mod includes `BotActivityRegistry.h` (a header-only, inline registry shared
+byte-identically with the dungeon-sim and artisans mods). With it:
+
+- world-PvP **skips bots that are reserved** (in a dungeon run or raid sim), so a
+  bot is never yanked out of a dungeon mid-run;
+- world-PvP **reserves** each bot it pulls into an event and **releases** it when
+  the event ends, so the dungeon sim won't grab a bot that's currently fighting.
+
+The registry has no link dependency between modules (inline function-local statics
+resolve to one instance program-wide), so each mod still builds and runs on its
+own — they simply coordinate when more than one is loaded.
+
+## Requirements
+
+- AzerothCore + mod-playerbots.
+- Apply the SQL under `data/sql/`.
+- If you also run mod-playerbot-dungeon-sim / mod-playerbots-artisans, keep every
+  copy of `src/BotActivityRegistry.h` byte-identical.
+
+## Installation
+
+```bash
+cd azerothcore/modules
+git clone https://github.com/<your-user>/mod-playerbot-world-pvp
+# re-run CMake configure, then rebuild
 ```
 
-The SQL seeds Vanilla-only 20+ hotspots, including Lakeshire, Southshore/Tarren Mill, Ashenvale, Crossroads, Arathi, STV, Dustwallow, Desolace, Badlands, and disabled future 50+ templates for Blackrock/EPL.
+## Credits
 
-Coordinates are starter seeds. Use the GM commands to fine-tune them in-game.
-
-## Recommended current config
-
-```ini
-PlayerbotWorldPvp.Enable = 1
-PlayerbotWorldPvp.GlobalMinLevel = 20
-PlayerbotWorldPvp.EventChancePerTick = 20
-PlayerbotWorldPvp.MaxActiveEvents = 2
-PlayerbotWorldPvp.MinOnlineBotsRequired = 3
-PlayerbotWorldPvp.MaxBotsPerSide = 8
-PlayerbotWorldPvp.BotAccountPrefix = auto
-```
-
-## GM commands
-
-```text
-.wpvp help
-.wpvp status
-.wpvp scan [minLvl] [maxLvl]
-.wpvp start <spot>
-.wpvp stop <id|all>
-
-.wpvp spot list
-.wpvp spot create <name> <attacker> <defender> <minLvl> <maxLvl>
-.wpvp spot rally <name>
-.wpvp spot target <name>
-.wpvp spot counts <name> <attMin> <attMax> <defMin> <defMax>
-.wpvp spot duration <name> <minMinutes> <maxMinutes>
-.wpvp spot enable <name> <0|1>
-```
-
-Useful first checks:
-
-```text
-.wpvp scan 20 40
-.wpvp spot list
-.wpvp start Lakeshire
-.wpvp start Southshore
-.wpvp start Crossroads
-```
-
-## Tuning a spot
-
-1. Go to where attackers should appear outside town.
-2. Run `.wpvp spot rally Lakeshire`.
-3. Go to where defenders should gather / attackers should move toward.
-4. Run `.wpvp spot target Lakeshire`.
-5. Set counts low while your 20+ bot population is small:
-
-```text
-.wpvp spot counts Lakeshire 2 4 2 4
-```
-
-## Logs
-
-Default log:
-
-```text
-./Logs/playerbot_world_pvp.log
-```
-
-Logs start/end, participants, movement, and returns.
+Built on AzerothCore and mod-playerbots.

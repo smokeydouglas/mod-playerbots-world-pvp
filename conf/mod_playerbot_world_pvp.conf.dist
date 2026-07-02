@@ -43,3 +43,23 @@ PlayerbotWorldPvp.MaxBotsPerSide = 8
 # Audit log.
 PlayerbotWorldPvp.FileLog = 1
 PlayerbotWorldPvp.FileLogPath = Logs/playerbot_world_pvp.log
+
+# Same-faction duel practice.
+# Same-team hotspots, like StormwindDuel and OrgrimmarDuel, stage pairs and cast the Duel spell.
+PlayerbotWorldPvp.SameFactionDuels = 1
+PlayerbotWorldPvp.DuelRequestDelaySeconds = 8
+PlayerbotWorldPvp.DuelSpellId = 7266
+PlayerbotWorldPvp.DuelPairLimit = 8
+
+# Playerbot AI integration.
+# This is the important part from inspecting mod-playerbots: bots already have a "pvp" strategy
+# that attacks enemy players when an enemy player is nearby, and a "duel" strategy that
+# accepts/responds to duel requests. WPvP now forces those strategies during events.
+PlayerbotWorldPvp.EnablePlayerbotAiStrategies = 1
+PlayerbotWorldPvp.ForcePvpFlag = 1
+PlayerbotWorldPvp.ForceAttackOnEngage = 1
+PlayerbotWorldPvp.EngageAfterMoveSeconds = 4
+PlayerbotWorldPvp.EngageRetrySeconds = 5
+PlayerbotWorldPvp.EngageMaxRetries = 12
+PlayerbotWorldPvp.PvpCombatStrategies = +pvp,+boost,+dps debuff,-passive,-stay
+PlayerbotWorldPvp.PvpNonCombatStrategies = +pvp,+duel,+boost,-passive,-stay

@@ -36,6 +36,11 @@
 #include <unordered_set>
 #include <vector>
 
+ // Shared cross-module bot reservation (header-only; identical copy shipped in
+ // mod-playerbot-dungeon-sim). Lets the two mods coordinate so neither grabs a
+ // bot the other is already using — with no link dependency between them.
+#include "BotActivityRegistry.h"
+
 namespace PlayerbotWorldPvp
 {
     enum TeamSide : uint8
@@ -120,6 +125,17 @@ namespace PlayerbotWorldPvp
         bool UseTeleport = false;
     };
 
+    struct DuelStep
+    {
+        uint64 EventId = 0;
+        uint32 ChallengerGuidLow = 0;
+        uint32 TargetGuidLow = 0;
+        std::string ChallengerName;
+        std::string TargetName;
+        uint32 ExecuteAt = 0;
+        uint8 RetryCount = 0;
+    };
+
     static bool Enable = true;
     static bool Debug = true;
     static uint32 TickSeconds = 60;
@@ -147,12 +163,18 @@ namespace PlayerbotWorldPvp
     static uint32 MinOnlineBotsRequired = 3;
     static uint32 GlobalMinLevel = 20;
 
+    static bool SameFactionDuels = true;
+    static uint32 DuelRequestDelaySeconds = 8;
+    static uint32 DuelSpellId = 7266;
+    static uint32 DuelPairLimit = 12;
+
     static bool FileLog = true;
     static std::string FileLogPath = "Logs/playerbot_world_pvp.log";
 
     static uint64 _nextEventId = 1;
     static std::vector<ActiveEvent> _activeEvents;
     static std::vector<MoveStep> _moveQueue;
+    static std::vector<DuelStep> _duelQueue;
 
     static std::string ToLowerCopy(std::string value)
     {
@@ -170,9 +192,9 @@ namespace PlayerbotWorldPvp
     {
         switch (team)
         {
-            case TEAM_SIDE_ALLIANCE: return "Alliance";
-            case TEAM_SIDE_HORDE: return "Horde";
-            default: return "Any";
+        case TEAM_SIDE_ALLIANCE: return "Alliance";
+        case TEAM_SIDE_HORDE: return "Horde";
+        default: return "Any";
         }
     }
 
@@ -201,20 +223,20 @@ namespace PlayerbotWorldPvp
     {
         switch (race)
         {
-            case RACE_HUMAN:
-            case RACE_DWARF:
-            case RACE_NIGHTELF:
-            case RACE_GNOME:
-            case RACE_DRAENEI:
-                return TEAM_SIDE_ALLIANCE;
-            case RACE_ORC:
-            case RACE_UNDEAD_PLAYER:
-            case RACE_TAUREN:
-            case RACE_TROLL:
-            case RACE_BLOODELF:
-                return TEAM_SIDE_HORDE;
-            default:
-                return TEAM_SIDE_ANY;
+        case RACE_HUMAN:
+        case RACE_DWARF:
+        case RACE_NIGHTELF:
+        case RACE_GNOME:
+        case RACE_DRAENEI:
+            return TEAM_SIDE_ALLIANCE;
+        case RACE_ORC:
+        case RACE_UNDEAD_PLAYER:
+        case RACE_TAUREN:
+        case RACE_TROLL:
+        case RACE_BLOODELF:
+            return TEAM_SIDE_HORDE;
+        default:
+            return TEAM_SIDE_ANY;
         }
     }
 
@@ -295,7 +317,12 @@ namespace PlayerbotWorldPvp
             return false;
 
         std::string username = result->Fetch()[0].Get<std::string>();
-        return username.rfind(BotAccountPrefix, 0) == 0;
+
+        // AzerothCore stores account usernames uppercase because AccountMgr::CreateAccount
+        // normalizes usernames, while the configured Playerbots prefix is usually lowercase
+        // in playerbots.conf (example: ashrandbot). A case-sensitive prefix compare rejects
+        // every valid random bot account and causes "not enough online bots" forever.
+        return ToLowerCopy(username).rfind(ToLowerCopy(BotAccountPrefix), 0) == 0;
     }
 
     static bool IsBotSafeToMove(Player* player, BotCandidate const& b)
@@ -352,9 +379,9 @@ namespace PlayerbotWorldPvp
     static std::string HotspotSelectSql(std::string const& whereExtra = "")
     {
         return "SELECT id,name,enabled,attacker_team,defender_team,min_level,max_level,map_id,"
-               "rally_x,rally_y,rally_z,rally_o,target_x,target_y,target_z,target_o,"
-               "attackers_min,attackers_max,defenders_min,defenders_max,duration_min,duration_max,weight,cooldown_seconds,last_start "
-               "FROM playerbot_world_pvp_hotspot " + whereExtra;
+            "rally_x,rally_y,rally_z,rally_o,target_x,target_y,target_z,target_o,"
+            "attackers_min,attackers_max,defenders_min,defenders_max,duration_min,duration_max,weight,cooldown_seconds,last_start "
+            "FROM playerbot_world_pvp_hotspot " + whereExtra;
     }
 
     static bool LoadHotspotByName(std::string name, Hotspot& out)
@@ -421,6 +448,8 @@ namespace PlayerbotWorldPvp
 
             if (exclude.find(b.GuidLow) != exclude.end())
                 continue;
+            if (BotActivity::IsReserved(b.GuidLow))
+                continue;   // busy in a dungeon/raid run
             if (team != TEAM_SIDE_ANY && b.Team != team)
                 continue;
             if (!AccountMatchesBotFilter(b.AccountId))
@@ -464,6 +493,23 @@ namespace PlayerbotWorldPvp
         step.ExecuteAt = GameTime::GetGameTime().count() + delay;
         step.UseTeleport = teleport;
         _moveQueue.push_back(step);
+    }
+
+    static bool IsSameFactionDuelSpot(Hotspot const& spot)
+    {
+        return SameFactionDuels && spot.AttackerTeam != TEAM_SIDE_ANY && spot.AttackerTeam == spot.DefenderTeam;
+    }
+
+    static void ScheduleDuel(uint64 eventId, BotCandidate const& challenger, BotCandidate const& target, uint32 delay)
+    {
+        DuelStep step;
+        step.EventId = eventId;
+        step.ChallengerGuidLow = challenger.GuidLow;
+        step.TargetGuidLow = target.GuidLow;
+        step.ChallengerName = challenger.Name;
+        step.TargetName = target.Name;
+        step.ExecuteAt = GameTime::GetGameTime().count() + delay;
+        _duelQueue.push_back(step);
     }
 
     static void MoveBot(Player* player, uint32 mapId, float x, float y, float z, float o, bool teleport)
@@ -518,6 +564,74 @@ namespace PlayerbotWorldPvp
         _moveQueue.swap(keep);
     }
 
+    static void ProcessDuelQueue()
+    {
+        if (_duelQueue.empty())
+            return;
+
+        uint32 now = GameTime::GetGameTime().count();
+        std::vector<DuelStep> keep;
+        keep.reserve(_duelQueue.size());
+
+        for (DuelStep const& step : _duelQueue)
+        {
+            if (step.ExecuteAt > now)
+            {
+                keep.push_back(step);
+                continue;
+            }
+
+            Player* challenger = FindOnlinePlayer(step.ChallengerGuidLow);
+            Player* target = FindOnlinePlayer(step.TargetGuidLow);
+            if (!challenger || !target || challenger->IsBeingTeleported() || target->IsBeingTeleported())
+            {
+                DuelStep retry = step;
+                if (retry.RetryCount < 20)
+                {
+                    ++retry.RetryCount;
+                    retry.ExecuteAt = now + 2;
+                    keep.push_back(retry);
+                }
+                continue;
+            }
+
+            BotCandidate cb; cb.GuidLow = step.ChallengerGuidLow; cb.AccountId = challenger->GetSession() ? challenger->GetSession()->GetAccountId() : 0; cb.Name = step.ChallengerName;
+            BotCandidate tb; tb.GuidLow = step.TargetGuidLow; tb.AccountId = target->GetSession() ? target->GetSession()->GetAccountId() : 0; tb.Name = step.TargetName;
+            if (!IsBotSafeToMove(challenger, cb) || !IsBotSafeToMove(target, tb))
+                continue;
+
+            if (challenger->GetMapId() != target->GetMapId() || challenger->GetDistance(target) > 35.0f)
+            {
+                // Bring the pair close enough for the Duel spell/request to have a chance.
+                target->TeleportTo(challenger->GetMapId(), challenger->GetPositionX() + 3.0f, challenger->GetPositionY() + 3.0f, challenger->GetPositionZ(), challenger->GetOrientation());
+                DuelStep retry = step;
+                if (retry.RetryCount < 20)
+                {
+                    ++retry.RetryCount;
+                    retry.ExecuteAt = now + 3;
+                    keep.push_back(retry);
+                }
+                continue;
+            }
+
+            if (challenger->IsInCombat())
+                challenger->CombatStop(true);
+            if (target->IsInCombat())
+                target->CombatStop(true);
+
+            // 7266 is the classic Duel spell/effect. Playerbot AI may auto-accept; if not,
+            // this still creates a visible duel request and lets us verify the event staging.
+            challenger->CastSpell(target, DuelSpellId, true);
+            challenger->SetFacingToObject(target);
+            target->SetFacingToObject(challenger);
+
+            StatusLog("[Duel] event #" + std::to_string(step.EventId) + " " + step.ChallengerName + " challenged " + step.TargetName + ".");
+            AuditLog("DUEL", "event=" + std::to_string(step.EventId) + " challenger=" + step.ChallengerName + " target=" + step.TargetName + " spell=" + std::to_string(DuelSpellId));
+        }
+
+        _duelQueue.swap(keep);
+    }
+
     static bool StartHotspot(Hotspot spot, ChatHandler* handler = nullptr)
     {
         std::unordered_set<uint32> excluded;
@@ -553,49 +667,59 @@ namespace PlayerbotWorldPvp
         event.StartedAt = now;
         event.EndsAt = now + urand(spot.DurationMin, spot.DurationMax) * MINUTE;
 
-        StatusLog("EVENT #" + std::to_string(eventId) + " START " + TeamName(spot.AttackerTeam) + " attacking " + spot.Name +
-            " vs " + TeamName(spot.DefenderTeam) + " defenders attackers=" + std::to_string(attackers.size()) + " defenders=" + std::to_string(defenders.size()));
-        AuditLog("START", "event=" + std::to_string(eventId) + " spot=" + spot.Name + " attackerTeam=" + TeamName(spot.AttackerTeam) +
-            " defenderTeam=" + TeamName(spot.DefenderTeam) + " attackers=" + std::to_string(attackers.size()) + " defenders=" + std::to_string(defenders.size()) +
+        bool sameFactionDuel = IsSameFactionDuelSpot(spot);
+        StatusLog("EVENT #" + std::to_string(eventId) + " START " + TeamName(spot.AttackerTeam) + (sameFactionDuel ? " duel practice at " : " attacking ") + spot.Name +
+            " vs " + TeamName(spot.DefenderTeam) + (sameFactionDuel ? " sparring partners=" : " defenders attackers=") + std::to_string(attackers.size()) + " defenders=" + std::to_string(defenders.size()));
+        AuditLog("START", "event=" + std::to_string(eventId) + " spot=" + spot.Name + " mode=" + (sameFactionDuel ? std::string("duel") : std::string("world_pvp")) +
+            " attackerTeam=" + TeamName(spot.AttackerTeam) + " defenderTeam=" + TeamName(spot.DefenderTeam) + " attackers=" + std::to_string(attackers.size()) + " defenders=" + std::to_string(defenders.size()) +
             " durationSeconds=" + std::to_string(event.EndsAt - event.StartedAt));
 
         auto addParticipant = [&](BotCandidate const& b, bool attacker)
-        {
-            Player* p = FindOnlinePlayer(b.GuidLow);
-            if (!IsBotSafeToMove(p, b))
-                return;
-
-            Participant part;
-            part.Bot = b;
-            part.Attacker = attacker;
-            part.OriginalMap = p->GetMapId();
-            part.OriginalX = p->GetPositionX();
-            part.OriginalY = p->GetPositionY();
-            part.OriginalZ = p->GetPositionZ();
-            part.OriginalO = p->GetOrientation();
-            event.Members.push_back(part);
-
-            float sx = (attacker ? spot.RallyX : spot.TargetX) + Jitter();
-            float sy = (attacker ? spot.RallyY : spot.TargetY) + Jitter();
-            float sz = attacker ? spot.RallyZ : spot.TargetZ;
-            float so = attacker ? spot.RallyO : spot.TargetO;
-            if (TeleportBots)
-                MoveBot(p, spot.MapId, sx, sy, sz, so, true);
-
-            AuditLog("MEMBER", "event=" + std::to_string(eventId) + " side=" + (attacker ? std::string("attacker") : std::string("defender")) +
-                " name=" + b.Name + " guid=" + std::to_string(b.GuidLow) + " level=" + std::to_string(b.Level) + " class=" + std::to_string(b.Class));
-
-            if (attacker)
             {
-                ScheduleMove(eventId, b, spot.MapId, spot.TargetX + Jitter(), spot.TargetY + Jitter(), spot.TargetZ, spot.TargetO,
-                    MoveFromRallyDelaySeconds, HardTeleportToTarget);
-            }
-        };
+                Player* p = FindOnlinePlayer(b.GuidLow);
+                if (!IsBotSafeToMove(p, b))
+                    return;
+
+                Participant part;
+                part.Bot = b;
+                part.Attacker = attacker;
+                part.OriginalMap = p->GetMapId();
+                part.OriginalX = p->GetPositionX();
+                part.OriginalY = p->GetPositionY();
+                part.OriginalZ = p->GetPositionZ();
+                part.OriginalO = p->GetOrientation();
+                event.Members.push_back(part);
+                BotActivity::Reserve(b.GuidLow);   // claim so the dungeon-sim won't grab it
+
+                float sx = (attacker ? spot.RallyX : spot.TargetX) + Jitter();
+                float sy = (attacker ? spot.RallyY : spot.TargetY) + Jitter();
+                float sz = attacker ? spot.RallyZ : spot.TargetZ;
+                float so = attacker ? spot.RallyO : spot.TargetO;
+                if (TeleportBots)
+                    MoveBot(p, spot.MapId, sx, sy, sz, so, true);
+
+                AuditLog("MEMBER", "event=" + std::to_string(eventId) + " side=" + (attacker ? std::string("attacker") : std::string("defender")) +
+                    " name=" + b.Name + " guid=" + std::to_string(b.GuidLow) + " level=" + std::to_string(b.Level) + " class=" + std::to_string(b.Class));
+
+                if (attacker)
+                {
+                    ScheduleMove(eventId, b, spot.MapId, spot.TargetX + Jitter(), spot.TargetY + Jitter(), spot.TargetZ, spot.TargetO,
+                        MoveFromRallyDelaySeconds, HardTeleportToTarget);
+                }
+            };
 
         for (BotCandidate const& b : attackers)
             addParticipant(b, true);
         for (BotCandidate const& b : defenders)
             addParticipant(b, false);
+
+        if (sameFactionDuel)
+        {
+            uint32 pairCount = std::min<uint32>(std::min<uint32>(attackers.size(), defenders.size()), DuelPairLimit);
+            for (uint32 i = 0; i < pairCount; ++i)
+                ScheduleDuel(eventId, attackers[i], defenders[i], MoveFromRallyDelaySeconds + DuelRequestDelaySeconds + i);
+            AuditLog("DUEL_QUEUE", "event=" + std::to_string(eventId) + " spot=" + spot.Name + " pairs=" + std::to_string(pairCount));
+        }
 
         _activeEvents.push_back(event);
 
@@ -610,6 +734,11 @@ namespace PlayerbotWorldPvp
     {
         StatusLog("EVENT #" + std::to_string(event.EventId) + " END " + event.Spot.Name + " reason=" + reason);
         AuditLog("END", "event=" + std::to_string(event.EventId) + " spot=" + event.Spot.Name + " reason=" + reason + " members=" + std::to_string(event.Members.size()));
+
+        // Free the reservation for every participant (even if we don't teleport
+        // them back) so these bots become available to other activities again.
+        for (Participant const& part : event.Members)
+            BotActivity::Release(part.Bot.GuidLow);
 
         if (!ReturnBotsAfterEvent)
             return;
@@ -677,7 +806,7 @@ namespace PlayerbotWorldPvp
 
     static void PrintStatus(ChatHandler* handler = nullptr)
     {
-        std::string header = "active events=" + std::to_string(_activeEvents.size()) + " queuedMoves=" + std::to_string(_moveQueue.size());
+        std::string header = "active events=" + std::to_string(_activeEvents.size()) + " queuedMoves=" + std::to_string(_moveQueue.size()) + " queuedDuels=" + std::to_string(_duelQueue.size());
         if (handler)
             handler->PSendSysMessage("PlayerbotWorldPvp: {}", header);
         else
@@ -692,7 +821,7 @@ namespace PlayerbotWorldPvp
             for (Participant const& p : e.Members)
                 p.Attacker ? ++attackers : ++defenders;
 
-            std::string line = "#" + std::to_string(e.EventId) + " " + e.Spot.Name + " " + TeamName(e.Spot.AttackerTeam) + " vs " + TeamName(e.Spot.DefenderTeam) +
+            std::string line = "#" + std::to_string(e.EventId) + " " + e.Spot.Name + " " + (IsSameFactionDuelSpot(e.Spot) ? std::string("DUEL ") : std::string("WAR ")) + TeamName(e.Spot.AttackerTeam) + " vs " + TeamName(e.Spot.DefenderTeam) +
                 " attackers=" + std::to_string(attackers) + " defenders=" + std::to_string(defenders) + " eta=" + std::to_string(left / MINUTE) + "m";
             if (handler)
                 handler->PSendSysMessage("{}", line);
@@ -709,6 +838,7 @@ namespace PlayerbotWorldPvp
                 EndEvent(e, "gm-stop-all");
             _activeEvents.clear();
             _moveQueue.clear();
+            _duelQueue.clear();
             if (handler)
                 handler->PSendSysMessage("PlayerbotWorldPvp: stopped all events.");
             return;
@@ -728,6 +858,7 @@ namespace PlayerbotWorldPvp
         }
         _activeEvents.swap(keep);
         _moveQueue.erase(std::remove_if(_moveQueue.begin(), _moveQueue.end(), [id](MoveStep const& s) { return s.EventId == id; }), _moveQueue.end());
+        _duelQueue.erase(std::remove_if(_duelQueue.begin(), _duelQueue.end(), [id](DuelStep const& s) { return s.EventId == id; }), _duelQueue.end());
         if (handler)
             handler->PSendSysMessage("PlayerbotWorldPvp: {} event #{}.", found ? "stopped" : "did not find", id);
     }
@@ -804,17 +935,18 @@ namespace PlayerbotWorldPvp
     static void ShowHelp(ChatHandler* handler)
     {
         handler->PSendSysMessage("PlayerbotWorldPvp commands:");
-        handler->PSendSysMessage(".wpvp status");
-        handler->PSendSysMessage(".wpvp scan [minLvl] [maxLvl]");
-        handler->PSendSysMessage(".wpvp start <spot>");
-        handler->PSendSysMessage(".wpvp stop <id|all>");
-        handler->PSendSysMessage(".wpvp spot list");
-        handler->PSendSysMessage(".wpvp spot create <name> <attacker:alliance|horde> <defender:alliance|horde> <minLvl> <maxLvl>");
-        handler->PSendSysMessage(".wpvp spot rally <name>   - save your current position as attacker rally/outside-town point");
-        handler->PSendSysMessage(".wpvp spot target <name>  - save your current position as target/defender point");
+        handler->PSendSysMessage(".wpvp status  / console: wpvp status");
+        handler->PSendSysMessage(".wpvp scan [minLvl] [maxLvl]  / console: wpvp scan [minLvl] [maxLvl]");
+        handler->PSendSysMessage(".wpvp start <spot>  / console: wpvp start <spot>");
+        handler->PSendSysMessage(".wpvp stop <id|all>  / console: wpvp stop <id|all>");
+        handler->PSendSysMessage(".wpvp spot list  / console: wpvp spot list");
+        handler->PSendSysMessage(".wpvp spot create <name> <attacker:alliance|horde> <defender:alliance|horde> <minLvl> <maxLvl>  (in-game GM only: uses your position)");
+        handler->PSendSysMessage(".wpvp spot rally <name>   - in-game GM only: save your current position as attacker rally/outside-town point");
+        handler->PSendSysMessage(".wpvp spot target <name>  - in-game GM only: save your current position as target/defender point");
         handler->PSendSysMessage(".wpvp spot counts <name> <attMin> <attMax> <defMin> <defMax>");
         handler->PSendSysMessage(".wpvp spot duration <name> <minMinutes> <maxMinutes>");
         handler->PSendSysMessage(".wpvp spot enable <name> <0|1>");
+        handler->PSendSysMessage("Same-faction spots are duel practice: e.g. StormwindDuel / OrgrimmarDuel.");
     }
 
     static bool HandleSpotCommand(ChatHandler* handler, std::vector<std::string> const& args)
@@ -853,7 +985,10 @@ namespace PlayerbotWorldPvp
             }
             Player* gm = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
             if (!gm)
+            {
+                handler->PSendSysMessage("PlayerbotWorldPvp: this command needs an in-game GM because it uses your current map/X/Y/Z position.");
                 return true;
+            }
 
             TeamSide attacker;
             TeamSide defender;
@@ -883,7 +1018,10 @@ namespace PlayerbotWorldPvp
         {
             Player* gm = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
             if (!gm)
+            {
+                handler->PSendSysMessage("PlayerbotWorldPvp: spot rally/target needs an in-game GM because it saves your current map/X/Y/Z position.");
                 return true;
+            }
             std::string name = args[2];
             WorldDatabase.EscapeString(name);
             std::string prefix = action == "rally" ? "rally" : "target";
@@ -997,7 +1135,7 @@ namespace PlayerbotWorldPvp
 class PlayerbotWorldPvpWorldScript : public WorldScript
 {
 public:
-    PlayerbotWorldPvpWorldScript() : WorldScript("PlayerbotWorldPvpWorldScript") { }
+    PlayerbotWorldPvpWorldScript() : WorldScript("PlayerbotWorldPvpWorldScript") {}
 
     void OnAfterConfigLoad(bool /*reload*/) override
     {
@@ -1023,12 +1161,17 @@ public:
         BotQueryLimit = sConfigMgr->GetOption<uint32>("PlayerbotWorldPvp.BotQueryLimit", 400);
         MinOnlineBotsRequired = sConfigMgr->GetOption<uint32>("PlayerbotWorldPvp.MinOnlineBotsRequired", 3);
         GlobalMinLevel = sConfigMgr->GetOption<uint32>("PlayerbotWorldPvp.GlobalMinLevel", 20);
+        SameFactionDuels = sConfigMgr->GetOption<bool>("PlayerbotWorldPvp.SameFactionDuels", true);
+        DuelRequestDelaySeconds = sConfigMgr->GetOption<uint32>("PlayerbotWorldPvp.DuelRequestDelaySeconds", 8);
+        DuelSpellId = sConfigMgr->GetOption<uint32>("PlayerbotWorldPvp.DuelSpellId", 7266);
+        DuelPairLimit = sConfigMgr->GetOption<uint32>("PlayerbotWorldPvp.DuelPairLimit", 12);
         FileLog = sConfigMgr->GetOption<bool>("PlayerbotWorldPvp.FileLog", true);
         FileLogPath = sConfigMgr->GetOption<std::string>("PlayerbotWorldPvp.FileLogPath", "Logs/playerbot_world_pvp.log");
 
         EventChancePerTick = std::min<uint32>(EventChancePerTick, 100);
         GlobalMinLevel = std::min<uint32>(std::max<uint32>(GlobalMinLevel, 1), 80);
         MaxBotsPerSide = std::min<uint32>(std::max<uint32>(MaxBotsPerSide, 1), 40);
+        DuelPairLimit = std::min<uint32>(std::max<uint32>(DuelPairLimit, 1), 40);
         if (TickSeconds == 0)
             TickSeconds = 60;
         if (MoveFromRallyDelaySeconds == 0)
@@ -1047,9 +1190,9 @@ public:
         if (Enable && !VerifyDatabaseSchema())
             Enable = false;
 
-        LOG_INFO("module", "[PlayerbotWorldPvp] Enable={} tick={}s chance={} maxActive={} prefix='{}' globalMinLevel={} movePoint={} returnBots={} fileLog='{}'",
-            Enable ? 1 : 0, TickSeconds, EventChancePerTick, MaxActiveEvents, BotAccountPrefix, GlobalMinLevel, UseMovePointAfterRally ? 1 : 0, ReturnBotsAfterEvent ? 1 : 0, FileLogPath);
-        AuditLog("CONFIG", "enabled=" + std::to_string(Enable ? 1 : 0) + " prefix=" + BotAccountPrefix + " chance=" + std::to_string(EventChancePerTick) + " globalMin=" + std::to_string(GlobalMinLevel));
+        LOG_INFO("module", "[PlayerbotWorldPvp] Enable={} tick={}s chance={} maxActive={} prefix='{}' globalMinLevel={} movePoint={} returnBots={} sameFactionDuels={} fileLog='{}'",
+            Enable ? 1 : 0, TickSeconds, EventChancePerTick, MaxActiveEvents, BotAccountPrefix, GlobalMinLevel, UseMovePointAfterRally ? 1 : 0, ReturnBotsAfterEvent ? 1 : 0, SameFactionDuels ? 1 : 0, FileLogPath);
+        AuditLog("CONFIG", "enabled=" + std::to_string(Enable ? 1 : 0) + " prefix=" + BotAccountPrefix + " chance=" + std::to_string(EventChancePerTick) + " globalMin=" + std::to_string(GlobalMinLevel) + " sameFactionDuels=" + std::to_string(SameFactionDuels ? 1 : 0));
         _startupElapsedMs = 0;
         _startupDelayLogged = false;
     }
@@ -1072,6 +1215,7 @@ public:
         }
 
         ProcessMoveQueue();
+        ProcessDuelQueue();
         ExpireEvents();
 
         if (_timerMs <= diff)
@@ -1089,8 +1233,7 @@ class PlayerbotWorldPvpPlayerScript : public PlayerScript
 public:
     PlayerbotWorldPvpPlayerScript()
         : PlayerScript("PlayerbotWorldPvpPlayerScript", { PLAYERHOOK_CAN_PLAYER_USE_CHAT })
-    {
-    }
+    {}
 
     bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 language, std::string& msg) override
     {
@@ -1109,14 +1252,14 @@ public:
 class PlayerbotWorldPvpCommandScript : public CommandScript
 {
 public:
-    PlayerbotWorldPvpCommandScript() : CommandScript("PlayerbotWorldPvpCommandScript") { }
+    PlayerbotWorldPvpCommandScript() : CommandScript("PlayerbotWorldPvpCommandScript") {}
 
     std::vector<Acore::ChatCommands::ChatCommandBuilder> GetCommands() const override
     {
         using namespace Acore::ChatCommands;
         static std::vector<ChatCommandBuilder> commandTable =
         {
-            { "wpvp", HandleWpvpCommand, SEC_GAMEMASTER, Console::No }
+            { "wpvp", HandleWpvpCommand, SEC_GAMEMASTER, Console::Yes }
         };
         return commandTable;
     }

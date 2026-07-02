@@ -134,3 +134,35 @@ ON DUPLICATE KEY UPDATE
   `duration_max`=VALUES(`duration_max`),
   `weight`=VALUES(`weight`),
   `cooldown_seconds`=VALUES(`cooldown_seconds`);
+
+-- Same-faction duel practice seeds.
+-- These are not city raids. They stage same-faction Playerbots outside capital cities and ask them to duel.
+-- Tune with .wpvp spot rally StormwindDuel / .wpvp spot target StormwindDuel, etc.
+INSERT INTO `playerbot_world_pvp_hotspot`
+(`name`,`enabled`,`attacker_team`,`defender_team`,`min_level`,`max_level`,`map_id`,`rally_x`,`rally_y`,`rally_z`,`rally_o`,`target_x`,`target_y`,`target_z`,`target_o`,`attackers_min`,`attackers_max`,`defenders_min`,`defenders_max`,`duration_min`,`duration_max`,`weight`,`cooldown_seconds`)
+VALUES
+('StormwindDuel',1,0,0,20,60,0,-8834,622,94,0,-8795,585,96,0,2,5,2,5,5,10,90,1200),
+('OrgrimmarDuel',1,1,1,20,60,1,1502,-4415,22,0,1450,-4418,25,0,2,5,2,5,5,10,90,1200)
+ON DUPLICATE KEY UPDATE
+  `enabled`=VALUES(`enabled`),
+  `attacker_team`=VALUES(`attacker_team`),
+  `defender_team`=VALUES(`defender_team`),
+  `min_level`=VALUES(`min_level`),
+  `max_level`=VALUES(`max_level`),
+  `map_id`=VALUES(`map_id`),
+  `rally_x`=VALUES(`rally_x`),
+  `rally_y`=VALUES(`rally_y`),
+  `rally_z`=VALUES(`rally_z`),
+  `rally_o`=VALUES(`rally_o`),
+  `target_x`=VALUES(`target_x`),
+  `target_y`=VALUES(`target_y`),
+  `target_z`=VALUES(`target_z`),
+  `target_o`=VALUES(`target_o`),
+  `attackers_min`=VALUES(`attackers_min`),
+  `attackers_max`=VALUES(`attackers_max`),
+  `defenders_min`=VALUES(`defenders_min`),
+  `defenders_max`=VALUES(`defenders_max`),
+  `duration_min`=VALUES(`duration_min`),
+  `duration_max`=VALUES(`duration_max`),
+  `weight`=VALUES(`weight`),
+  `cooldown_seconds`=VALUES(`cooldown_seconds`);
