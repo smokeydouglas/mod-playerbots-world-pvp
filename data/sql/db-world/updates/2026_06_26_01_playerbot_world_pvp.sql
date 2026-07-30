@@ -48,20 +48,7 @@ DELETE FROM `command` WHERE `name` IN (
 );
 
 INSERT INTO `command` (`name`, `security`, `help`) VALUES
-('wpvp', 3, 'Syntax: .wpvp help\nPlayerbot World PvP GM commands.'),
-('wpvp help', 3, 'Syntax: .wpvp help\nShows Playerbot World PvP commands.'),
-('wpvp status', 3, 'Syntax: .wpvp status\nShows active world-PvP events.'),
-('wpvp scan', 3, 'Syntax: .wpvp scan [minLvl] [maxLvl]\nShows eligible online random Playerbots and per-hotspot readiness.'),
-('wpvp start', 3, 'Syntax: .wpvp start <spot>\nForce-start a configured world-PvP hotspot.'),
-('wpvp stop', 3, 'Syntax: .wpvp stop <id|all>\nStop one or all active world-PvP events.'),
-('wpvp spot', 3, 'Syntax: .wpvp spot <subcommand>\nManage Playerbot World PvP hotspots.'),
-('wpvp spot list', 3, 'Syntax: .wpvp spot list\nList configured hotspots.'),
-('wpvp spot create', 3, 'Syntax: .wpvp spot create <name> <attacker> <defender> <minLvl> <maxLvl>\nCreate/update a hotspot at your current position.'),
-('wpvp spot rally', 3, 'Syntax: .wpvp spot rally <name>\nSave your current location as attacker rally/outside-town point.'),
-('wpvp spot target', 3, 'Syntax: .wpvp spot target <name>\nSave your current location as target/defender point.'),
-('wpvp spot counts', 3, 'Syntax: .wpvp spot counts <name> <attMin> <attMax> <defMin> <defMax>\nSet event population.'),
-('wpvp spot duration', 3, 'Syntax: .wpvp spot duration <name> <minMinutes> <maxMinutes>\nSet event duration.'),
-('wpvp spot enable', 3, 'Syntax: .wpvp spot enable <name> <0|1>\nEnable or disable a hotspot.');
+('wpvp', 3, 'Syntax: .wpvp help\nPlayerbot World PvP GM commands.');
 
 -- Vanilla world-PvP campaign seeds.
 -- Map 0 = Eastern Kingdoms, Map 1 = Kalimdor.
